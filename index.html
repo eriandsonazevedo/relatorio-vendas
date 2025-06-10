@@ -471,7 +471,7 @@
 
             const vendasPorVendedor = data.reduce((acc, record) => {
                 let vendedorKey = record.vendedor;
-                if (vendedorKey === 'Fichario' || vendedorKey === 'Sem vendedor') {
+                if (vendedorKey === 'Fichario' || vendedorKey === 'Sem vendedor' || vendedorKey === 'LIQUIDAÇÃO') {
                     vendedorKey = `${vendedorKey} (${record.pdv})`;
                 }
                 if (!acc[vendedorKey]) {
