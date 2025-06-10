@@ -348,6 +348,19 @@
             display: inline-block;
             margin-right: 8px;
         }
+
+        .debug-info {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 0.9rem;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -385,6 +398,7 @@
                     <span class="icon">✅</span>Arquivo processado com sucesso!
                 </div>
                 <div class="error-message"></div>
+                <div class="debug-info"></div>
             </div>
 
             <div class="loading">Processando dados do relatório...</div>
@@ -439,43 +453,6 @@
     </div>
 
     <script>
-        // Mantém toda a funcionalidade original
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        
-        function filledCell(cell) {
-            return cell !== '' && cell != null;
-        }
-        
-        function loadFileData(filename) {
-            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-                try {
-                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                    var firstSheetName = workbook.SheetNames[0];
-                    var worksheet = workbook.Sheets[firstSheetName];
-
-                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                    var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                    var headerRowIndex = filteredData.findIndex((row, index) =>
-                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                    );
-                    if (headerRowIndex === -1 || headerRowIndex > 25) {
-                        headerRowIndex = 0;
-                    }
-
-                    var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
-                    csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                    return csv;
-                } catch (e) {
-                    console.error(e);
-                    return "";
-                }
-            }
-            return gk_fileData[filename] || "";
-        }
-
         function processSalesData(data) {
             console.log('Processing data:', data);
             const totalGeral = data.reduce((sum, record) => sum + record.valorTotal, 0).toFixed(2);
@@ -559,6 +536,30 @@
             document.querySelector('.error-message').style.display = 'none';
         }
 
+        function parseNumericValue(value) {
+            if (!value) return 0;
+            
+            // Converte para string e remove espaços
+            let strValue = String(value).trim();
+            
+            // Se já é um número, retorna
+            if (!isNaN(strValue) && strValue !== '') {
+                return parseFloat(strValue);
+            }
+            
+            // Remove R$, espaços e outros caracteres não numéricos exceto vírgula e ponto
+            strValue = strValue.replace(/[R$\s]/g, '');
+            
+            // Se contém vírgula, assume formato brasileiro (1.234,56)
+            if (strValue.includes(',')) {
+                // Remove pontos (separadores de milhares) e substitui vírgula por ponto
+                strValue = strValue.replace(/\./g, '').replace(',', '.');
+            }
+            
+            const numValue = parseFloat(strValue);
+            return isNaN(numValue) ? 0 : numValue;
+        }
+
         async function parseExcel(file) {
             try {
                 console.log('Starting Excel parsing for file:', file.name);
@@ -569,28 +570,34 @@
                     const firstSheet = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[firstSheet];
                     const sheetData = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+                    
                     console.log('Raw sheet data:', sheetData);
-
+                    
+                    
                     let salesData = [];
                     const validPdvs = ['SV', 'FLORANIA', 'JUCURUTU', 'CURRAIS', 'TENENTE'];
 
+                    // Procurar por linha de cabeçalho
                     let headerRowIndex = -1;
                     for (let i = 0; i < sheetData.length; i++) {
                         const row = sheetData[i];
-                        if (row.some(cell => typeof cell === 'string' && cell.match(/OPERADOR|VENDEDOR|PRODUTO|/i))) {
+                        if (row.some(cell => typeof cell === 'string' && cell.match(/OPERADOR|VENDEDOR|PRODUTO|TOTAL/i))) {
                             headerRowIndex = i;
+                            console.log(`Header found at row ${i}:`, row);
                             break;
                         }
                     }
 
                     if (headerRowIndex === -1) {
-                        throw new Error('Cabeçalho da tabela não encontrado no Excel.');
+                        console.log('Header not found, starting from row 0');
+                        headerRowIndex = 0;
                     }
 
+                    // Processar dados linha por linha
                     for (let i = headerRowIndex + 1; i < sheetData.length; i++) {
                         const row = sheetData[i];
-                        if (!row || row.length < 4) {
-                            console.log(`Skipping empty or incomplete row: ${row}`);
+                        if (!row || row.length < 8) {
+                            console.log(`Skipping incomplete row ${i}: only ${row ? row.length : 0} columns`);
                             continue;
                         }
 
@@ -598,53 +605,64 @@
                         let pdv = '';
                         let valorTotal = 0;
 
+                        // Buscar por DINDONA para identificar vendedor
                         let dindonaFound = false;
                         for (let j = 0; j < row.length; j++) {
                             const cell = row[j] ? String(row[j]).trim() : '';
-                            if (cell.match(/DINDONA|Dindona Gerencial/i)) {
+                            if (cell.match(/DINDONA|Dindona/i)) {
                                 dindonaFound = true;
+                                // Vendedor geralmente está na próxima coluna
                                 if (j + 1 < row.length) {
                                     vendedor = row[j + 1] ? String(row[j + 1]).trim() : '';
                                 }
+                                console.log(`DINDONA found at column ${j}, vendedor: "${vendedor}"`);
                                 break;
                             }
                         }
 
                         if (!dindonaFound || !vendedor) {
-                            console.log(`No VENDEDOR found in row: ${row}`);
+                            console.log(`No DINDONA/vendedor found in row ${i}`);
                             continue;
                         }
 
+                        // Buscar PDV válido na linha
                         for (let j = 0; j < row.length; j++) {
                             const cell = row[j] ? String(row[j]).trim() : '';
                             if (validPdvs.includes(cell)) {
                                 pdv = cell;
-                                for (let k = j + 1; k < row.length; k++) {
-                                    const nextCell = row[k] ? String(row[k]).trim() : '';
-                                    if (nextCell.match(/R\$\s*[\d]+,[\d]{2}/)) {
-                                        valorTotal = parseFloat(nextCell.replace(/R\$\s*/, '').replace(',', '.')) || 0;
-                                        break;
-                                    }
-                                }
+                                console.log(`PDV "${pdv}" found at column ${j}`);
                                 break;
                             }
                         }
 
-                        if (!pdv || valorTotal === 0) {
-                            console.log(`No valid PDV or VALOR TOTAL in row: ${row}`);
+                        if (!pdv) {
+                            console.log(`No valid PDV found in row ${i}`);
+                            continue;
+                        }
+
+                        // CORREÇÃO PRINCIPAL: Pegar valor da coluna H (índice 7)
+                        const columnH = row[7]; // Coluna H = índice 7 (A=0, B=1, ..., H=7)
+                        valorTotal = parseNumericValue(columnH);
+                        
+                        console.log(`Row ${i}: PDV="${pdv}", Vendedor="${vendedor}", Column H raw="${columnH}", parsed=${valorTotal}`);
+
+                        if (valorTotal === 0) {
+                            console.log(`No valid value in column H for row ${i}: "${columnH}"`);
                             continue;
                         }
 
                         const rowData = { vendedor, pdv, valorTotal };
                         salesData.push(rowData);
-                        console.log(`Parsed row:`, rowData);
+                        console.log(`Added row data:`, rowData);
                     }
 
+                    console.log(`Total valid rows parsed: ${salesData.length}`);
+                    console.log('All parsed data:', salesData);
+
                     if (salesData.length > 0) {
-                        console.log(`Total rows parsed: ${salesData.length}`);
                         updateHtmlReport(salesData);
                     } else {
-                        const errorMsg = 'Nenhum dado válido encontrado no Excel. Verifique o console para detalhes.';
+                        const errorMsg = 'Nenhum dado válido encontrado no Excel. Verifique se:\n- A coluna H contém os valores de "Total de Venda"\n- Existem linhas com DINDONA e PDVs válidos (SV, FLORANIA, JUCURUTU, CURRAIS, TENENTE)';
                         console.error(errorMsg);
                         document.querySelector('.error-message').textContent = errorMsg;
                         document.querySelector('.error-message').style.display = 'block';
@@ -662,7 +680,7 @@
 
                 reader.readAsArrayBuffer(file);
             } catch (error) {
-                const errorMsg = `Erro ao processar o Excel: ${error.message}. Verifique o console para detalhes.`;
+                const errorMsg = `Erro ao processar o Excel: ${error.message}`;
                 console.error(errorMsg, error);
                 document.querySelector('.error-message').textContent = errorMsg;
                 document.querySelector('.error-message').style.display = 'block';
@@ -677,6 +695,7 @@
                 console.log('Valid Excel file selected:', file.name);
                 document.querySelector('.error-message').style.display = 'none';
                 document.querySelector('.success-message').style.display = 'none';
+                document.querySelector('.debug-info').style.display = 'none';
                 document.querySelector('.loading').style.display = 'block';
                 await parseExcel(file);
             } else {
@@ -687,6 +706,9 @@
                 document.querySelector('.loading').style.display = 'none';
             }
         });
+
+        // Ocultar loading inicialmente
+        document.querySelector('.loading').style.display = 'none';
     </script>
 </body>
 </html>
